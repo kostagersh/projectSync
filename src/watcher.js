@@ -2,6 +2,7 @@ const fs = require('fs');
 const { createServer } = require('http');
 const io = require('socket.io');
 const path = require('path');
+const webpack = require('webpack');
 
 const PORT = 8001;
 
@@ -95,11 +96,11 @@ module.exports = class Watcher {
         if (!fs.existsSync(this.basePath)) {
           fs.mkdirSync(`${this.basePath}`);
         }
-        const pageDictionary = data.reduce((fileDictionary, datum) => {
+        this.pageDictionary = data.reduce((fileDictionary, datum) => {
           const fileDict = this.createCodeHeirarchy(datum, basePath);
           return Object.assign({}, fileDictionary, fileDict);
         }, {});
-        console.log('pageDictionary', pageDictionary);
+        console.log('pageDictionary', this.pageDictionary);
       });
       this.socket.on('disconnect', () => {
         console.log('Disconnected');
@@ -118,15 +119,68 @@ module.exports = class Watcher {
     }
   }
 
-  watch() {
-    fs.watch(this.basePath, { recursive: true }, (eventType, filename) => {
-      console.log(`event type is: ${eventType}`);
-      if (filename) {
-        console.log(`filename provided: ${filename}`);
+  transformFileIfNeeded({ fileRelativePath, fileContent, filePath }) {
+    return new Promise((resolve, reject) => {
+      if (path.basename(fileRelativePath) === 'vendors.js') {
+        const rand = Math.floor(Math.random() * 10000);
+        webpack(
+          {
+            entry: filePath,
+            output: {
+              path: path.resolve(path.dirname(filePath), '../../'),
+              filename: `.vendors.${rand}.js`,
+              libraryTarget: 'umd',
+            },
+          },
+          (err, stats) => {
+            if (err || stats.hasErrors()) {
+              // Handle errors here
+            }
+            const newPath = filePath.replace(
+              'vendors.js',
+              `../../.vendors.${rand}.js`,
+            );
+            const newFileContent = fs.readFileSync(newPath).toString();
+            fs.unlinkSync(newPath);
+            // Done processing
+            resolve({ fileRelativePath, fileContent: newFileContent });
+          },
+        );
       } else {
-        console.log('filename not provided');
+        const fixedPath =
+          path.dirname(fileRelativePath) +
+          '/' +
+          this.pageDictionary[path.basename(fileRelativePath)] +
+          '.js';
+        resolve({ fileRelativePath: fixedPath, fileContent });
       }
     });
+  }
+
+  watch() {
+    fs.watch(
+      this.basePath,
+      { recursive: true },
+      async (eventType, fileRelativePath) => {
+        console.log(`event type is: ${eventType}`);
+        if (fileRelativePath) {
+          console.log(`filename provided: ${fileRelativePath}`);
+          const filePath = this.basePath + '/' + fileRelativePath;
+          const fileContent = fs.readFileSync(filePath, {
+            encoding: 'utf8',
+          });
+          const data = await this.transformFileIfNeeded({
+            fileRelativePath,
+            fileContent,
+            filePath,
+          });
+          console.log('pushing file', data);
+          this.socket.emit('codesync:ide:syncSingle', data);
+        } else {
+          console.log('filename not provided');
+        }
+      },
+    );
   }
 
   async init() {
