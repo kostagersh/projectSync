@@ -147,11 +147,16 @@ module.exports = class Watcher {
           },
         );
       } else {
-        const fixedPath =
-          path.dirname(fileRelativePath) +
-          '/' +
-          this.pageDictionary[path.basename(fileRelativePath)] +
-          '.js';
+        const basename = path.basename(fileRelativePath);
+        const dirname = path.dirname(fileRelativePath);
+        let fixedPath = fileRelativePath;
+        if (dirname === 'public/pages') {
+          fixedPath =
+            path.dirname(fileRelativePath) +
+            '/' +
+            this.pageDictionary[basename] +
+            '.js';
+        }
         resolve({ fileRelativePath: fixedPath, fileContent });
       }
     });
