@@ -1,3 +1,5 @@
 const Watcher = require('./watcher');
 
-new Watcher('/tmp/sync').init();
+const args = process.argv.slice(2);
+
+new Watcher('/tmp/sync', args[0]).init();

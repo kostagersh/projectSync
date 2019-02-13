@@ -3,13 +3,15 @@ const { createServer } = require('http');
 const io = require('socket.io');
 const path = require('path');
 const webpack = require('webpack');
+const opn = require('opn');
 
 const PORT = 8001;
 
 module.exports = class Watcher {
-  constructor(basePath) {
+  constructor(basePath, editorUrl) {
     //should be dir
     this.basePath = basePath;
+    this.editorUrl = editorUrl;
   }
 
   getPath(pathToResolve) {
@@ -189,9 +191,10 @@ module.exports = class Watcher {
   }
 
   async init() {
-    await this.initServer(() =>
-      this.socket.emit('codesync:ide:syncAllRequest'),
-    );
-    this.watch();
+    await this.initServer(() => {
+      this.socket.emit('codesync:ide:syncAllRequest');
+      this.watch();
+    });
+    opn(this.editorUrl + '&localSync=8001');
   }
 };
