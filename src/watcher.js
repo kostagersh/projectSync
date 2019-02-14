@@ -149,19 +149,63 @@ module.exports = class Watcher {
           },
         );
       } else {
-        const basename = path.basename(fileRelativePath);
-        const dirname = path.dirname(fileRelativePath);
-        let fixedPath = fileRelativePath;
-        if (dirname === 'public/pages') {
-          fixedPath =
-            path.dirname(fileRelativePath) +
-            '/' +
-            this.pageDictionary[basename] +
-            '.js';
-        }
-        resolve({ fileRelativePath: fixedPath, fileContent });
+        resolve({ fileRelativePath, fileContent });
       }
     });
+  }
+
+  async onFileChanged(filePath) {
+    const fileRelativePath = this.translateFileNameForEditor(filePath);
+    const fileContent = fs.readFileSync(filePath, {
+      encoding: 'utf8',
+    });
+    const data = await this.transformFileIfNeeded({
+      fileRelativePath,
+      fileContent,
+      filePath,
+    });
+    console.log('pushing file', data);
+    this.socket.emit('codesync:ide:syncSingle', data);
+  }
+
+  translateFilePageNameToId(filePath) {
+    const fileRelativePath = path.relative(this.basePath, filePath);
+    if (fileRelativePath.startsWith('public')) {
+      const { base } = path.parse(filePath);
+      const pageId = this.pageDictionary[base];
+      return pageId;
+    }
+  }
+
+  translateFileNameForEditor(filePath) {
+    const pageId = this.translateFilePageNameToId(filePath);
+    if (pageId) {
+      return `public/${
+        filePath.includes('/pages/') ? 'pages/' : ''
+      }${pageId}.js`;
+    } else {
+      return path.relative(this.basePath, filePath);
+    }
+  }
+
+  async onFileDeleted(filePath) {
+    const fileRelativePath = this.translateFileNameForEditor(filePath);
+    console.log('file has been deleted', fileRelativePath);
+    this.socket.emit('codesync:ide:fileDelete', { fileRelativePath });
+  }
+
+  async onFileAdded(filePath) {
+    const fileRelativePath = this.translateFileNameForEditor(filePath);
+    const fileContent = fs.readFileSync(filePath, {
+      encoding: 'utf8',
+    });
+    const data = await this.transformFileIfNeeded({
+      fileRelativePath,
+      fileContent,
+      filePath,
+    });
+    console.log('pushing file', data);
+    this.socket.emit('codesync:ide:syncSingle', data);
   }
 
   watch() {
@@ -172,17 +216,17 @@ module.exports = class Watcher {
         console.log(`event type is: ${eventType}`);
         if (fileRelativePath) {
           console.log(`filename provided: ${fileRelativePath}`);
-          const filePath = this.basePath + '/' + fileRelativePath;
-          const fileContent = fs.readFileSync(filePath, {
-            encoding: 'utf8',
-          });
-          const data = await this.transformFileIfNeeded({
-            fileRelativePath,
-            fileContent,
-            filePath,
-          });
-          console.log('pushing file', data);
-          this.socket.emit('codesync:ide:syncSingle', data);
+          const filePath = `${this.basePath}/${fileRelativePath}`;
+          if (fs.existsSync(filePath)) {
+            if (eventType === 'change') {
+              this.onFileChanged(filePath);
+            }
+            if (eventType === 'rename') {
+              this.onFileAdded(filePath);
+            }
+          } else {
+            this.onFileDeleted(filePath);
+          }
         } else {
           console.log('filename not provided');
         }
