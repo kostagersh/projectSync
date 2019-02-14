@@ -18,7 +18,7 @@ module.exports = class Watcher {
     return path.resolve(pathToResolve);
   }
 
-  createCodeHeirarchy(node, itemPath) {
+  createCodeHeirarchy(node, itemPath, action) {
     console.log('creating', node);
     try {
       if (node.type === 'dir') {
@@ -31,6 +31,7 @@ module.exports = class Watcher {
             const subFiles = this.createCodeHeirarchy(
               child,
               `${itemPath}/${node.name}`,
+              action,
             );
             return Object.assign({}, fileDictionary, subFiles);
           }, {});
@@ -40,7 +41,7 @@ module.exports = class Watcher {
         if (pageName) {
           const name = this.normalizeName(pageName);
           const relativePath = `${itemPath}/${name}`;
-          this.writeFileIfNeed(relativePath, content);
+          action(relativePath, content);
           return { [name]: node.name.split('.').shift() };
         } else {
           // do nothing, it's system file
@@ -65,6 +66,14 @@ module.exports = class Watcher {
   writeFileIfNeed(relativePath, content) {
     if (this.needToCreateFile(relativePath, content)) {
       return fs.writeFileSync(relativePath, content);
+    } else {
+      return Promise.resolve();
+    }
+  }
+
+  pushFileIfNeed(filePath, content) {
+    if (this.needToCreateFile(filePath, content)) {
+      return this.onFileChanged(filePath);
     } else {
       return Promise.resolve();
     }
@@ -99,7 +108,24 @@ module.exports = class Watcher {
           fs.mkdirSync(`${this.basePath}`);
         }
         this.pageDictionary = data.reduce((fileDictionary, datum) => {
-          const fileDict = this.createCodeHeirarchy(datum, basePath);
+          const fileDict = this.createCodeHeirarchy(datum, basePath, () => {});
+          return Object.assign({}, fileDictionary, fileDict);
+        }, {});
+        let action;
+        switch (this.syncMode) {
+          case 'pull':
+            action = this.writeFileIfNeed.bind(this);
+            break;
+          case 'push':
+            action = this.pushFileIfNeed.bind(this);
+            break;
+
+          default:
+            action = this.writeFileIfNeed.bind(this);
+            break;
+        }
+        data.reduce((fileDictionary, datum) => {
+          const fileDict = this.createCodeHeirarchy(datum, basePath, action);
           return Object.assign({}, fileDictionary, fileDict);
         }, {});
         console.log('pageDictionary', this.pageDictionary);
@@ -204,7 +230,7 @@ module.exports = class Watcher {
       fileContent,
       filePath,
     });
-    console.log('pushing file', data);
+    console.log('adding file', data);
     this.socket.emit('codesync:ide:syncSingle', data);
   }
 
@@ -234,8 +260,9 @@ module.exports = class Watcher {
     );
   }
 
-  async init() {
+  async init(syncMode) {
     await this.initServer(() => {
+      this.syncMode = syncMode;
       this.socket.emit('codesync:ide:syncAllRequest');
       this.watch();
     });
