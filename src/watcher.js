@@ -4,6 +4,7 @@ const io = require('socket.io');
 const path = require('path');
 const webpack = require('webpack');
 const opn = require('opn');
+const _ = require('lodash');
 
 const PORT = 8001;
 
@@ -12,6 +13,7 @@ module.exports = class Watcher {
     //should be dir
     this.basePath = basePath;
     this.editorUrl = editorUrl;
+    this.filePaths = [];
   }
 
   getPath(pathToResolve) {
@@ -40,8 +42,9 @@ module.exports = class Watcher {
         const { pageName, content } = node;
         if (pageName) {
           const name = this.normalizeName(pageName);
-          const relativePath = `${itemPath}/${name}`;
-          action(relativePath, content);
+          const filePath = `${itemPath}/${name}`;
+          this.filePaths.push(path.relative(this.basePath, filePath));
+          action(filePath, content);
           return { [name]: node.name.split('.').shift() };
         } else {
           // do nothing, it's system file
@@ -51,6 +54,16 @@ module.exports = class Watcher {
     } catch (error) {
       console.log('error', error);
     }
+  }
+
+  needToPushFile(relativePath, content) {
+    if (!fs.existsSync(relativePath)) {
+      return false;
+    }
+    const currentFileContent = fs.readFileSync(relativePath, {
+      encoding: 'utf8',
+    });
+    return currentFileContent !== content;
   }
 
   needToCreateFile(relativePath, content) {
@@ -72,7 +85,7 @@ module.exports = class Watcher {
   }
 
   pushFileIfNeed(filePath, content) {
-    if (this.needToCreateFile(filePath, content)) {
+    if (this.needToPushFile(filePath, content)) {
       return this.onFileChanged(filePath);
     } else {
       return Promise.resolve();
@@ -95,6 +108,38 @@ module.exports = class Watcher {
     return clearedNameFromEllipsis;
   }
 
+  getLocalPaths(rootPath, localPaths = []) {
+    const dirPaths = fs.readdirSync(rootPath);
+    dirPaths.forEach(dirPath => {
+      const localPath = `${rootPath}/${dirPath}`;
+      if (fs.lstatSync(localPath).isDirectory()) {
+        localPaths = [
+          ...localPaths,
+          ...this.getLocalPaths(localPath, localPaths),
+        ];
+      } else {
+        localPaths.push(path.relative(this.basePath, localPath));
+      }
+    });
+    return _.uniq(localPaths);
+  }
+
+  pushDiffs(remotePaths) {
+    const localPaths = this.getLocalPaths(this.basePath);
+    console.log('remotePaths', remotePaths);
+    console.log('localPaths', localPaths);
+    const toCreate = _.difference(localPaths, remotePaths);
+    console.log('toCreate', toCreate);
+    toCreate.forEach(filePath => {
+      this.onFileAdded(`${this.basePath}/${filePath}`);
+    });
+    const toDelete = _.difference(remotePaths, localPaths);
+    console.log('toDelete', toDelete);
+    toDelete.forEach(filePath => {
+      this.onFileDeleted(`${this.basePath}/${filePath}`);
+    });
+  }
+
   initListeners(ioServer, onConnect) {
     const basePath = this.getPath(this.basePath);
     console.log('basePath', basePath);
@@ -111,6 +156,7 @@ module.exports = class Watcher {
           const fileDict = this.createCodeHeirarchy(datum, basePath, () => {});
           return Object.assign({}, fileDictionary, fileDict);
         }, {});
+        this.filePaths = _.uniq(this.filePaths);
         let action;
         switch (this.syncMode) {
           case 'pull':
@@ -118,10 +164,11 @@ module.exports = class Watcher {
             break;
           case 'push':
             action = this.pushFileIfNeed.bind(this);
+            this.pushDiffs(this.filePaths);
             break;
 
           default:
-            action = this.writeFileIfNeed.bind(this);
+            action = () => {};
             break;
         }
         data.reduce((fileDictionary, datum) => {
